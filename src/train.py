@@ -1,62 +1,40 @@
-import argparse
-import pandas as pd
-import re
-import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from nltk.stem import WordNetLemmatizer
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-import joblib
-from azureml.core import Run
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense, SpatialDropout1D
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
 
-# Start an Azure ML run
-run = Run.get_context()
+# Tokenize
+tokenizer = Tokenizer(num_words=5000)
+tokenizer.fit_on_texts(df['processed_text'])
+X_seq = tokenizer.texts_to_sequences(df['processed_text'])
+X_padded = pad_sequences(X_seq, maxlen=50)  # Padding to fixed size
 
-nltk.download("stopwords")
-nltk.download("punkt")
-nltk.download("wordnet")
+# Convert y to categorical
+from tensorflow.keras.utils import to_categorical
+y_categorical = to_categorical(df['mood_encoded'])
 
-stop_words = set(stopwords.words("english"))
-lemmatizer = WordNetLemmatizer()
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X_padded, y_categorical, test_size=0.2, random_state=42)
 
-def preprocess_text(text):
-    text = text.lower()
-    text = re.sub(r"[^\w\s]", "", text)
-    tokens = word_tokenize(text)
-    tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
-    return " ".join(tokens)
+# Define LSTM Model
+model = Sequential([
+    Embedding(input_dim=5000, output_dim=128, input_length=50),
+    SpatialDropout1D(0.2),
+    LSTM(100, dropout=0.2, recurrent_dropout=0.2),
+    Dense(y_categorical.shape[1], activation='softmax')  # Softmax for multi-class classification
+])
 
-# Load data from Azure ML Dataset
-df = run.input_datasets["ratings_dataset"].to_pandas_dataframe()
-df["cleaned_text"] = df["text"].apply(preprocess_text)
+# Compile
+model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 
-# Vectorization
-vectorizer = TfidfVectorizer(max_features=5000)
-X = vectorizer.fit_transform(df["cleaned_text"]).toarray()
-y = df["rating"]
+# Train
+model.fit(X_train, y_train, epochs=5, batch_size=32, validation_data=(X_test, y_test))
 
-# Train/Test Split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# Save
+model.save("mood_lstm_model.h5")
 
-# Train Model
-model = RandomForestRegressor(n_estimators=100, random_state=42)
-model.fit(X_train, y_train)
-
-# Evaluate Model
-y_pred = model.predict(X_test)
-mae = mean_absolute_error(y_test, y_pred)
-mse = mean_squared_error(y_test, y_pred)
-r2 = r2_score(y_test, y_pred)
-
-run.log("Mean Absolute Error", mae)
-run.log("Mean Squared Error", mse)
-run.log("R² Score", r2)
-
-# Save Model
-joblib.dump(model, "rating_model.pkl")
-run.upload_file("rating_model.pkl", "outputs/rating_model.pkl")
-run.complete()
+# Evaluate
+_, accuracy = model.evaluate(X_test, y_test)
+print(f"Test Accuracy: {accuracy:.2f}")
 
