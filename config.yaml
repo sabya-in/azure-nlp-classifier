@@ -1,0 +1,13 @@
+name: tensorflow-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - pip
+  - pip:
+      - azureml-sdk
+      - tensorflow==2.8.0
+      - pandas
+      - numpy
+      - scikit-learn
